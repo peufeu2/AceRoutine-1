@@ -163,9 +163,11 @@ extern className##_##name name
 /** Yield execution to another coroutine. */
 #define COROUTINE_YIELD() \
     do { \
+      this->setDelayZero(); \
       this->setYielding(); \
       COROUTINE_YIELD_INTERNAL(); \
       this->setRunning(); \
+      this->profileEnterZero(); \
     } while (false)
 
 /**
@@ -180,11 +182,15 @@ extern className##_##name name
  */
 #define COROUTINE_AWAIT(condition) \
     do { \
+      auto old_mDelayStart = mDelayStart; \
+      this->setDelayZero(); \
+      this->profileExit( old_mDelayStart ); \
       this->setYielding(); \
       do { \
         COROUTINE_YIELD_INTERNAL(); \
       } while (!(condition)); \
       this->setRunning(); \
+      this->profileEnterZero(); \
     } while (false)
 
 /**
@@ -204,23 +210,29 @@ extern className##_##name name
  */
 #define COROUTINE_DELAY(delayMillis) \
     do { \
+      auto old_mDelayStart = mDelayStart; \
       this->setDelayMillis(delayMillis); \
+      this->profileExit( old_mDelayStart ); \
       this->setDelaying(); \
       do { \
         COROUTINE_YIELD_INTERNAL(); \
       } while (!this->isDelayExpired()); \
       this->setRunning(); \
+      this->profileEnterMillis(); \
     } while (false)
 
 /** Yield for delayMicros. Similiar to COROUTINE_DELAY(delayMillis). */
 #define COROUTINE_DELAY_MICROS(delayMicros) \
     do { \
+      auto old_mDelayStart = mDelayStart; \
       this->setDelayMicros(delayMicros); \
+      this->profileExit( old_mDelayStart ); \
       this->setDelaying(); \
       do { \
         COROUTINE_YIELD_INTERNAL(); \
       } while (!this->isDelayMicrosExpired()); \
       this->setRunning(); \
+      this->profileEnterMicros(); \
     } while (false)
 
 /**
@@ -240,12 +252,15 @@ extern className##_##name name
  */
 #define COROUTINE_DELAY_SECONDS(delaySeconds) \
     do { \
+      auto old_mDelayStart = mDelayStart; \
       this->setDelaySeconds(delaySeconds); \
+      this->profileExit( old_mDelayStart ); \
       this->setDelaying(); \
       do { \
         COROUTINE_YIELD_INTERNAL(); \
       } while (!this->isDelaySecondsExpired()); \
       this->setRunning(); \
+      this->profileEnterSeconds(); \
     } while (false)
 
 /**
@@ -270,14 +285,281 @@ extern const __FlashStringHelper* const sStatusStrings[];
 template <typename T> class CoroutineSchedulerTemplate;
 
 /**
+ *    To insert a name member variable in all Coroutines (or not)
+ *    specify T_NAME CoroutineTemplate parameter
+ *    as NamedCoroutine (or UnnamedCoroutine).
+ */
+class UnnamedCoroutine {
+  public:
+    const char* getName() const { return nullptr; }
+    void setName( const char *_name ) { }
+};
+
+class NamedCoroutine : public UnnamedCoroutine {
+  protected:
+    const char* name;
+  public:
+    const char* getName() const { return name; }
+    void setName( const char *_name ) { name = _name; }
+};
+
+
+/**
+ *    16-bit delay implementation (uses less RAM)
+ */
+template <typename T_CLOCK>
+class Coroutine_Delay16bit_Impl {
+  public:
+
+    unsigned long coroutineMillis()  const {   return T_CLOCK::millis();    }
+    unsigned long coroutineMicros()  const {   return T_CLOCK::micros();    }
+    unsigned long coroutineSeconds() const {   return T_CLOCK::seconds();   }
+
+    /** Check if delay millis time is over. */
+    bool isDelayExpired() const {
+      uint16_t nowMillis = coroutineMillis();
+      uint16_t elapsed = nowMillis - mDelayStart;
+      return elapsed >= mDelayDuration;
+    }
+
+    /** Check if delay micros time is over. */
+    bool isDelayMicrosExpired() const {
+      uint16_t nowMicros = coroutineMicros();
+      uint16_t elapsed = nowMicros - mDelayStart;
+      return elapsed >= mDelayDuration;
+    }
+
+    /** Check if delay seconds time is over. */
+    bool isDelaySecondsExpired() const {
+      uint16_t nowSeconds = coroutineSeconds();
+      uint16_t elapsed = nowSeconds - mDelayStart;
+      return elapsed >= mDelayDuration;
+    }
+
+    /**
+     * Configure the delay timer for delayMillis.
+     *
+     * The maximum duration is set to (UINT16_MAX / 2) (i.e. 32767
+     * milliseconds) if given a larger value. This makes the longest allowable
+     * time between two successive calls to isDelayExpired() for a given
+     * coroutine to be 32767 (UINT16_MAX - UINT16_MAX / 2 - 1) milliseconds,
+     * which should be long enough for all practical use-cases. (The '- 1'
+     * comes from an edge case where isDelayExpired() evaluates to be true in
+     * the CoroutineScheduler::runCoroutine() but becomes to be false in the
+     * COROUTINE_DELAY() macro inside Coroutine::runCoroutine()) because the
+     * clock increments by 1 millisecond.)
+     */
+    void setDelayMillis(uint16_t delayMillis) {
+      mDelayStart = coroutineMillis();
+
+      // If delayMillis is a compile-time constant, the compiler seems to
+      // completely optimize away this bounds checking code.
+      mDelayDuration = (delayMillis >= UINT16_MAX / 2)
+          ? UINT16_MAX / 2
+          : delayMillis;
+    }
+
+    /**
+     * Configure the delay timer for delayMicros. Similar to seDelayMillis(),
+     * the maximum delay is 32767 micros.
+     */
+    void setDelayMicros(uint16_t delayMicros) {
+      mDelayStart = coroutineMicros();
+
+      // If delayMicros is a compile-time constant, the compiler seems to
+      // completely optimize away this bounds checking code.
+      mDelayDuration = (delayMicros >= UINT16_MAX / 2)
+          ? UINT16_MAX / 2
+          : delayMicros;
+    }
+
+    /**
+     * Configure the delay timer for delaySeconds. Similar to seDelayMillis(),
+     * the maximum delay is 32767 seconds.
+     */
+    void setDelaySeconds(uint16_t delaySeconds) {
+      mDelayStart = coroutineSeconds();
+
+      // If delaySeconds is a compile-time constant, the compiler seems to
+      // completely optimize away this bounds checking code.
+      mDelayDuration = (delaySeconds >= UINT16_MAX / 2)
+          ? UINT16_MAX / 2
+          : delaySeconds;
+    }
+
+    /**
+     * Configures zero delay.
+     * This seems useless, but if the profiler is enabled, this will record
+     * the current timestamp.
+     */
+    void setDelayZero() {}
+
+    /**
+     * ...and if the profiler is enabled, this will look at the timestamp
+     * recorded by setDelay() and thus the profiler will know how long we
+     * waited in that YIELD.
+     */
+    void profileEnterZero() {}
+    void profileEnterMillis () {}
+    void profileEnterMicros () {}
+    void profileEnterSeconds() {}
+    void profileExit( uint16_t old_mDelayStart ) {}
+
+  protected:
+    /**
+     * Start time provided by COROUTINE_DELAY(), COROUTINE_DELAY_MICROS(), or
+     * COROUTINE_DELAY_SECONDS(). The unit of this number is context dependent,
+     * milliseconds, microseconds, or seconds.
+     */
+    uint16_t mDelayStart;
+
+    /**
+     * Delay time specified by COROUTINE_DELAY(), COROUTINE_DELAY_MICROS() or,
+     * COROUTINE_DELAY_SECONDS(). The unit of this number is context dependent,
+     * milliseconds, microseconds, or seconds.
+     */
+    uint16_t mDelayDuration;
+};
+
+
+/**
+ *    32-bit delay implementation (uses 4 bytes more RAM)
+ *    More flexible if the delay is calculated in the coroutine
+ *    as setDelayMillis() is no longer limited to 32767 milliseconds, 
+ *    instead being limited to 2^31 us, or 2147 seconds. 
+ *    Basically this avoids if()'s in the coroutine to call DELAY_SECONDS
+ *    if the value is too large to fit in the 16-bit millisecond delay.
+ */
+template <typename T_CLOCK>
+class Coroutine_Delay32bit_Impl {
+  public:
+    unsigned long coroutineMillis()  const {   return T_CLOCK::millis();    }
+    unsigned long coroutineMicros()  const {   return T_CLOCK::micros();    }
+    unsigned long coroutineSeconds() const {   return T_CLOCK::seconds();   }
+
+    bool isDelayExpired() const {
+      uint32_t nowMicros = coroutineMicros();
+      uint32_t elapsed = nowMicros - mDelayStart;
+      return elapsed >= mDelayDuration;
+    }
+    bool isDelayMicrosExpired() const {
+      uint32_t nowMicros = coroutineMicros();
+      uint32_t elapsed = nowMicros - mDelayStart;
+      return elapsed >= mDelayDuration;
+    }
+    bool isDelaySecondsExpired() const {
+      uint32_t nowMicros = coroutineMicros();
+      uint32_t elapsed = nowMicros - mDelayStart;
+      return elapsed >= mDelayDuration;
+    }
+
+    void setDelayMillis(uint16_t delayMillis) {
+      mDelayStart = coroutineMicros();
+      mDelayDuration = (delayMillis >= UINT32_MAX / 2000)
+                      ? UINT32_MAX / 2
+                      : delayMillis*1000;
+    }
+    void setDelayMicros(uint32_t delayMicros) {
+      mDelayStart = coroutineMicros();
+      // If delayMicros is a compile-time constant, the compiler seems to
+      // completely optimize away this bounds checking code.
+      mDelayDuration = (delayMicros >= UINT32_MAX / 2)
+          ? UINT32_MAX / 2
+          : delayMicros;
+    }
+    void setDelaySeconds(uint16_t delaySeconds) {
+      mDelayStart = coroutineMicros();
+      mDelayDuration = (delaySeconds >= UINT32_MAX / 2000000)
+                      ? UINT32_MAX / 2
+                      : delaySeconds*1000000;
+    }
+
+    void setDelayZero() {}
+    void profileEnterMillis ( ) {}
+    void profileEnterMicros ( ) {}
+    void profileEnterSeconds( ) {}
+    void profileEnterZero() {}
+    void profileExit( uint32_t old_mDelayStart ) {}
+
+  protected:
+    uint32_t mDelayStart;
+    uint32_t mDelayDuration;
+};
+
+class CoroutineProfilerBase {
+    const char *name;
+  public:
+    void setName( const char *_name ) { name = _name; }
+    virtual void profileWait( unsigned long cur_micros, unsigned long wait_micros, unsigned long expected_wait_micros ) {}
+    virtual void profileRun ( unsigned long cur_micros, unsigned long run_micros  ) {}
+};
+
+// template <typename T_CLOCK>
+// class Coroutine_Delay32bit_Profiler_Impl: public Coroutine_Delay32bit_Impl<T_CLOCK> {
+//   protected:
+//     CoroutineProfilerBase *mWaitProfiler = nullptr, *mRunProfiler = nullptr;
+
+//   public:
+
+//     void setWaitProfiler( CoroutineProfilerBase *profiler ) { mWaitProfiler = profiler; }
+//     void setRunProfiler ( CoroutineProfilerBase *profiler ) { mRunProfiler  = profiler; }
+
+//     /**
+//      * Configures zero delay.
+//      * This seems useless, but if the profiler is enabled, this will record
+//      * the current timestamp.
+//      */
+//     void setDelayZero() {
+//       mDelayStart = coroutineMicros();
+//     }
+
+//     /**
+//      * ...and if the profiler is enabled, this will look at the timestamp
+//      * recorded by setDelay() and thus the profiler will know how long we
+//      * waited in that YIELD.
+//      */
+//     void profileEnterMicros ( ) { profileEnterZero(); }
+//     void profileEnterMillis ( ) { profileEnterZero(); }
+//     void profileEnterSeconds( ) { profileEnterZero(); }
+
+//     void profileEnterZero() { 
+//       unsigned long cur_micros = coroutineMicros();
+//       if( mWaitProfiler )
+//         mWaitProfiler->profileWait( cur_micros, cur_micros-mDelayStart, mDelayDuration );
+
+//       // mDelayStart is only used when coroutine is in Delay/Yield state. 
+//       // Reuse it in Run state to store timestamp when it entered Run state
+//       mDelayStart = cur_micros;
+//     }
+
+//     /**
+//      *  When the coroutine entered Run state, the macros above stored the timestamp in
+//      *  mDelayStart. Then, when it is about to enter Delay/Yield state, the macros move
+//      *  this value to old_mDelayStart, setup the delay and the current timestamp into
+//      *  mDelayStart. So, we don't need to call micros() again.
+//      */
+//     void profileExit( uint32_t old_mDelayStart ) {
+//       if( mRunProfiler )
+//         mRunProfiler->profileRun( mDelayStart, mDelayStart - old_mDelayStart );
+//     }
+
+// };
+
+
+/**
  * Base class of all coroutines. The actual coroutine code is an implementation
  * of the virtual runCoroutine() method.
  */
-template <typename T_CLOCK>
-class CoroutineTemplate {
-  friend class CoroutineSchedulerTemplate<CoroutineTemplate<T_CLOCK>>;
+template <
+  typename T_CLOCK,
+  typename T_NAME,
+  template <typename> typename T_DELAY
+  >
+class CoroutineTemplate : public T_NAME, public T_DELAY<T_CLOCK> {
+  friend class CoroutineSchedulerTemplate<CoroutineTemplate<T_CLOCK,T_NAME,T_DELAY>>;
   friend class ::AceRoutineTest_statusStrings;
   friend class ::SuspendTest_suspendAndResume;
+
 
   public:
     /**
@@ -356,27 +638,6 @@ class CoroutineTemplate {
     void reset() {
       mStatus = kStatusYielding;
       mJumpPoint = nullptr;
-    }
-
-    /** Check if delay millis time is over. */
-    bool isDelayExpired() const {
-      uint16_t nowMillis = coroutineMillis();
-      uint16_t elapsed = nowMillis - mDelayStart;
-      return elapsed >= mDelayDuration;
-    }
-
-    /** Check if delay micros time is over. */
-    bool isDelayMicrosExpired() const {
-      uint16_t nowMicros = coroutineMicros();
-      uint16_t elapsed = nowMicros - mDelayStart;
-      return elapsed >= mDelayDuration;
-    }
-
-    /** Check if delay seconds time is over. */
-    bool isDelaySecondsExpired() const {
-      uint16_t nowSeconds = coroutineSeconds();
-      uint16_t elapsed = nowSeconds - mDelayStart;
-      return elapsed >= mDelayDuration;
     }
 
     /** The coroutine was suspended with a call to suspend(). */
@@ -545,84 +806,6 @@ class CoroutineTemplate {
      */
     void setTerminated() { mStatus = kStatusTerminated; }
 
-    /**
-     * Configure the delay timer for delayMillis.
-     *
-     * The maximum duration is set to (UINT16_MAX / 2) (i.e. 32767
-     * milliseconds) if given a larger value. This makes the longest allowable
-     * time between two successive calls to isDelayExpired() for a given
-     * coroutine to be 32767 (UINT16_MAX - UINT16_MAX / 2 - 1) milliseconds,
-     * which should be long enough for all practical use-cases. (The '- 1'
-     * comes from an edge case where isDelayExpired() evaluates to be true in
-     * the CoroutineScheduler::runCoroutine() but becomes to be false in the
-     * COROUTINE_DELAY() macro inside Coroutine::runCoroutine()) because the
-     * clock increments by 1 millisecond.)
-     */
-    void setDelayMillis(uint16_t delayMillis) {
-      mDelayStart = coroutineMillis();
-
-      // If delayMillis is a compile-time constant, the compiler seems to
-      // completely optimize away this bounds checking code.
-      mDelayDuration = (delayMillis >= UINT16_MAX / 2)
-          ? UINT16_MAX / 2
-          : delayMillis;
-    }
-
-    /**
-     * Configure the delay timer for delayMicros. Similar to seDelayMillis(),
-     * the maximum delay is 32767 micros.
-     */
-    void setDelayMicros(uint16_t delayMicros) {
-      mDelayStart = coroutineMicros();
-
-      // If delayMicros is a compile-time constant, the compiler seems to
-      // completely optimize away this bounds checking code.
-      mDelayDuration = (delayMicros >= UINT16_MAX / 2)
-          ? UINT16_MAX / 2
-          : delayMicros;
-    }
-
-    /**
-     * Configure the delay timer for delaySeconds. Similar to seDelayMillis(),
-     * the maximum delay is 32767 seconds.
-     */
-    void setDelaySeconds(uint16_t delaySeconds) {
-      mDelayStart = coroutineSeconds();
-
-      // If delaySeconds is a compile-time constant, the compiler seems to
-      // completely optimize away this bounds checking code.
-      mDelayDuration = (delaySeconds >= UINT16_MAX / 2)
-          ? UINT16_MAX / 2
-          : delaySeconds;
-    }
-
-    /**
-     * Returns the current millisecond clock. By default it returns the global
-     * millis() function from Arduino but can be overridden by providing a
-     * different T_CLOCK template parameter.
-     */
-    static unsigned long coroutineMillis() {
-      return T_CLOCK::millis();
-    }
-
-    /**
-     * Returns the current microseconds clock. By default it returns the global
-     * micros() function from Arduino but can be overridden by providing a
-     * different T_CLOCK template parameter.
-     */
-    static unsigned long coroutineMicros() {
-      return T_CLOCK::micros();
-    }
-
-    /**
-     * Returns the current clock in unit of seconds, truncated to the lower
-     * 16-bits. This is an approximation of (millis / 1000). It does not need
-     * to be perfectly accurate because COROUTINE_DELAY_SECONDS() is not
-     * guaranteed to be precise.
-     */
-    static unsigned long coroutineSeconds() {
-      return T_CLOCK::seconds();
-    }
 
   private:
     // Disable copy-constructor and assignment operator
@@ -671,19 +854,6 @@ class CoroutineTemplate {
     /** Run-state of the coroutine. */
     Status mStatus = kStatusYielding;
 
-    /**
-     * Start time provided by COROUTINE_DELAY(), COROUTINE_DELAY_MICROS(), or
-     * COROUTINE_DELAY_SECONDS(). The unit of this number is context dependent,
-     * milliseconds, microseconds, or seconds.
-     */
-    uint16_t mDelayStart;
-
-    /**
-     * Delay time specified by COROUTINE_DELAY(), COROUTINE_DELAY_MICROS() or,
-     * COROUTINE_DELAY_SECONDS(). The unit of this number is context dependent,
-     * milliseconds, microseconds, or seconds.
-     */
-    uint16_t mDelayDuration;
 };
 
 /**
@@ -692,7 +862,7 @@ class CoroutineTemplate {
  * class of all user-defined coroutines created using the COROUTINE() macro or
  * through manual subclassing of this class.
  */
-using Coroutine = CoroutineTemplate<ClockInterface>;
+using Coroutine = CoroutineTemplate<ClockInterface,UnnamedCoroutine,Coroutine_Delay16bit_Impl>;
 
 }
 
