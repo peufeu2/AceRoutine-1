@@ -106,6 +106,20 @@ class CoroutineSchedulerTemplate {
       getScheduler()->listCoroutines(printer);
     }
 
+    static void printProfilingStats( Print& printer, bool reset ) {
+      printer.print("{\n");
+      for (T_COROUTINE** p = T_COROUTINE::getRoot(); (*p) != nullptr; ) {
+        bool it_printed_something = (*p)->printProfilingStats( printer );
+        if( reset )
+          (*p)->clearProfilingStats();
+        p = (*p)->getNext();
+        if( *p && it_printed_something )
+          printer.print( "," );
+        printer.print( "\n" );
+      }
+      printer.print( "}\n" );
+    }    
+
   private:
     // Disable copy-constructor and assignment operator
     CoroutineSchedulerTemplate(const CoroutineSchedulerTemplate&) = delete;

@@ -45,6 +45,12 @@ class ClockInterface {
     /** Get the current micros. */
     static unsigned long micros() { return ::micros(); }
 
+    /** Get whatever unit we want to use for profiling coroutine RUN time:
+     *  could be micros, cpu clocks...  default to micros.
+     *  Note coroutine WAIT TIME in Delay/Yield state is profiled using micros.
+     */
+    static unsigned long cycles() { return ::micros(); }
+
     /**
      * Get the current seconds. This is derived by dividing millis() by 1000,
      * which works pretty well until the `unsigned long` rolls over at
