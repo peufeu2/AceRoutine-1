@@ -80,9 +80,14 @@ class SuspendTest_suspendAndResume;
 /** Internal helper macro to allow overloading of the COROUTINE() macro. */
 #define GET_COROUTINE(_1, _2, NAME, ...) NAME
 
-/** Implement the 1-argument COROUTINE() macro. */
+/** Implement the 1-argument COROUTINE() macro. 
+ *  
+ *  bx:Removed ace_routine:: because that interferes with 
+ * configuration using templates
+ * 
+ */
 #define COROUTINE1(name) \
-struct Coroutine_##name : ace_routine::Coroutine { \
+struct Coroutine_##name : Coroutine { \
   Coroutine_##name(); \
   int runCoroutine() override; \
 } name; \
@@ -119,7 +124,7 @@ int className##_##name :: runCoroutine()
 
 /** Implement the 1-argument EXTERN_COROUTINE() macro. */
 #define EXTERN_COROUTINE1(name) \
-struct Coroutine_##name : ace_routine::Coroutine { \
+struct Coroutine_##name : Coroutine { \
   Coroutine_##name(); \
   int runCoroutine() override; \
 }; \
@@ -160,10 +165,13 @@ extern className##_##name name
       jumpLabel: ; \
     } while (false)
 
-/** Yield execution to another coroutine. */
+/** Yield execution to another coroutine. 
+ *  bx: see definitions of profileExit and profileEnter in Coroutine32bit.h
+ * */
 #define COROUTINE_YIELD() \
     do { \
-      this->setDelayZero(); \
+      this->profileExit();  \
+      this->setDelayZero();  \
       this->setYielding(); \
       COROUTINE_YIELD_INTERNAL(); \
       this->setRunning(); \
@@ -182,9 +190,8 @@ extern className##_##name name
  */
 #define COROUTINE_AWAIT(condition) \
     do { \
-      auto old_mDelayStart = mDelayStart; \
+      this->profileExit(); \
       this->setDelayZero(); \
-      this->profileExit( old_mDelayStart ); \
       this->setYielding(); \
       do { \
         COROUTINE_YIELD_INTERNAL(); \
@@ -210,9 +217,8 @@ extern className##_##name name
  */
 #define COROUTINE_DELAY(delayMillis) \
     do { \
-      auto old_mDelayStart = mDelayStart; \
+      this->profileExit( ); \
       this->setDelayMillis(delayMillis); \
-      this->profileExit( old_mDelayStart ); \
       this->setDelaying(); \
       do { \
         COROUTINE_YIELD_INTERNAL(); \
@@ -224,9 +230,8 @@ extern className##_##name name
 /** Yield for delayMicros. Similiar to COROUTINE_DELAY(delayMillis). */
 #define COROUTINE_DELAY_MICROS(delayMicros) \
     do { \
-      auto old_mDelayStart = mDelayStart; \
+      this->profileExit( ); \
       this->setDelayMicros(delayMicros); \
-      this->profileExit( old_mDelayStart ); \
       this->setDelaying(); \
       do { \
         COROUTINE_YIELD_INTERNAL(); \
@@ -252,9 +257,8 @@ extern className##_##name name
  */
 #define COROUTINE_DELAY_SECONDS(delaySeconds) \
     do { \
-      auto old_mDelayStart = mDelayStart; \
+      this->profileExit( ); \
       this->setDelaySeconds(delaySeconds); \
-      this->profileExit( old_mDelayStart ); \
       this->setDelaying(); \
       do { \
         COROUTINE_YIELD_INTERNAL(); \
@@ -284,32 +288,41 @@ extern const __FlashStringHelper* const sStatusStrings[];
 // Forward declaration of CoroutineSchedulerTemplate<T>
 template <typename T> class CoroutineSchedulerTemplate;
 
-class CoroutineProfilerBase {
-  public:
-    virtual void profileWait( unsigned long wait_micros, unsigned long expected_wait_micros ) =0;
-    virtual void profileRun ( unsigned long run_cycles  ) =0;
-    virtual void clear() =0;
-    virtual void print( Print& printer ) =0;
-};
+/**   bx:
+ *    Base class for the Profiler. We need to declare it for the 
+ *    dummy functions below.
+ */
+class CoroutineProfilerBase;
 
-/**
+/**   bx:
+ *    Helper base class.
+ * 
  *    To insert a name member variable in all Coroutines (or not)
- *    specify T_NAME CoroutineTemplate parameter
- *    as NamedCoroutine (or UnnamedCoroutine).
+ *    NamedCoroutine (or UnnamedCoroutine) is used as base class.
+ * 
+ *    Note all coroutines must have the same base, since Scheduler is
+ *    templated from Coroutine, and we can have only one Scheduler.
+ * 
+ *    Using this as base class means the name functions don't have to be
+ *    virtual. 
  */
 class UnnamedCoroutine {
   public:
     const char* getName() const { return nullptr; }
     void setName( const char *_name ) { }
 
-    // virtual void setWaitProfiler( CoroutineProfilerBase *profiler ) { }
-    // virtual void setRunProfiler ( CoroutineProfilerBase *profiler ) { }
-    // virtual CoroutineProfilerBase* getWaitProfiler( ) { return nullptr; }
-    // virtual CoroutineProfilerBase* getRunProfiler ( ) { return nullptr; }
-    // virtual bool printProfilingStats( Print& printer ) { return false; }
-    // virtual void clearProfilingStats( ) { }
+    // dummy functions so user code compiles even with profiling off.
+    virtual void setWaitProfiler( CoroutineProfilerBase *profiler ) { }
+    virtual void setRunProfiler ( CoroutineProfilerBase *profiler ) { }
+    virtual CoroutineProfilerBase* getWaitProfiler( ) { return nullptr; }
+    virtual CoroutineProfilerBase* getRunProfiler ( ) { return nullptr; }
+    virtual bool printProfilingStats( Print& printer ) { return false; }
+    virtual void clearProfilingStats( ) { }
 };
 
+/**
+ * Base class with name.
+ */
 class NamedCoroutine : public UnnamedCoroutine {
   protected:
     const char* name;
@@ -318,8 +331,131 @@ class NamedCoroutine : public UnnamedCoroutine {
     void setName( const char *_name ) { name = _name; }
 };
 
-#include "Coroutine16bit.h"
-#include "Coroutine32bit.h"
+
+/**
+ * bx: This Delay class inherits from the Named/Unnamed classes above,
+ * and the Coroutine class will inherit from it.
+ * 
+ *    This delay class comes in several versions:
+ *      either 16 bit or 32 bit delays without profiling
+ *      and 32 bit delays with profiling
+ * 
+ *    This is the original 16-bit delay implementation.
+ */
+template <typename T_BASE, typename T_CLOCK>
+class Coroutine_Delay_16bit_Impl : public T_BASE {
+  public:
+
+    unsigned long coroutineMillis()  const {   return T_CLOCK::millis();    }
+    unsigned long coroutineMicros()  const {   return T_CLOCK::micros();    }
+    unsigned long coroutineSeconds() const {   return T_CLOCK::seconds();   }
+
+    /** Check if delay millis time is over. */
+    bool isDelayExpired() const {
+      uint16_t nowMillis = coroutineMillis();
+      uint16_t elapsed = nowMillis - mDelayStart;
+      return elapsed >= mDelayDuration;
+    }
+
+    /** Check if delay micros time is over. */
+    bool isDelayMicrosExpired() const {
+      uint16_t nowMicros = coroutineMicros();
+      uint16_t elapsed = nowMicros - mDelayStart;
+      return elapsed >= mDelayDuration;
+    }
+
+    /** Check if delay seconds time is over. */
+    bool isDelaySecondsExpired() const {
+      uint16_t nowSeconds = coroutineSeconds();
+      uint16_t elapsed = nowSeconds - mDelayStart;
+      return elapsed >= mDelayDuration;
+    }
+
+    /**
+     * Configure the delay timer for delayMillis.
+     *
+     * The maximum duration is set to (UINT16_MAX / 2) (i.e. 32767
+     * milliseconds) if given a larger value. This makes the longest allowable
+     * time between two successive calls to isDelayExpired() for a given
+     * coroutine to be 32767 (UINT16_MAX - UINT16_MAX / 2 - 1) milliseconds,
+     * which should be long enough for all practical use-cases. (The '- 1'
+     * comes from an edge case where isDelayExpired() evaluates to be true in
+     * the CoroutineScheduler::runCoroutine() but becomes to be false in the
+     * COROUTINE_DELAY() macro inside Coroutine::runCoroutine()) because the
+     * clock increments by 1 millisecond.)
+     */
+    void setDelayMillis(uint16_t delayMillis) {
+      mDelayStart = coroutineMillis();
+
+      // If delayMillis is a compile-time constant, the compiler seems to
+      // completely optimize away this bounds checking code.
+      mDelayDuration = (delayMillis >= UINT16_MAX / 2)
+          ? UINT16_MAX / 2
+          : delayMillis;
+    }
+
+    /**
+     * Configure the delay timer for delayMicros. Similar to seDelayMillis(),
+     * the maximum delay is 32767 micros.
+     */
+    void setDelayMicros(uint16_t delayMicros) {
+      mDelayStart = coroutineMicros();
+
+      // If delayMicros is a compile-time constant, the compiler seems to
+      // completely optimize away this bounds checking code.
+      mDelayDuration = (delayMicros >= UINT16_MAX / 2)
+          ? UINT16_MAX / 2
+          : delayMicros;
+    }
+
+    /**
+     * Configure the delay timer for delaySeconds. Similar to seDelayMillis(),
+     * the maximum delay is 32767 seconds.
+     */
+    void setDelaySeconds(uint16_t delaySeconds) {
+      mDelayStart = coroutineSeconds();
+
+      // If delaySeconds is a compile-time constant, the compiler seems to
+      // completely optimize away this bounds checking code.
+      mDelayDuration = (delaySeconds >= UINT16_MAX / 2)
+          ? UINT16_MAX / 2
+          : delaySeconds;
+    }
+
+    /** bx:
+     * Configures zero delay.
+     * This seems useless, but if the profiler is enabled, this will record
+     * the current timestamp. so it needs to be called.
+     */
+    void setDelayZero() {}
+
+    /** bx:
+     * ...and if the profiler is enabled, this will look at the timestamp
+     * recorded by setDelay() and thus the profiler will know how long we
+     * waited in that YIELD.
+     */
+    void profileEnterZero() {}
+    void profileEnterMillis () {}
+    void profileEnterMicros () {}
+    void profileEnterSeconds() {}
+    void profileExit( ) {}
+
+  protected:
+    /**
+     * Start time provided by COROUTINE_DELAY(), COROUTINE_DELAY_MICROS(), or
+     * COROUTINE_DELAY_SECONDS(). The unit of this number is context dependent,
+     * milliseconds, microseconds, or seconds.
+     */
+    uint16_t mDelayStart;
+
+    /**
+     * Delay time specified by COROUTINE_DELAY(), COROUTINE_DELAY_MICROS() or,
+     * COROUTINE_DELAY_SECONDS(). The unit of this number is context dependent,
+     * milliseconds, microseconds, or seconds.
+     */
+    uint16_t mDelayDuration;
+};
+
 
 /**
  * Base class of all coroutines. The actual coroutine code is an implementation
@@ -330,7 +466,6 @@ class CoroutineTemplate : public T_BASE {
   friend class CoroutineSchedulerTemplate<CoroutineTemplate<T_BASE>>;
   friend class ::AceRoutineTest_statusStrings;
   friend class ::SuspendTest_suspendAndResume;
-
 
   public:
     /**

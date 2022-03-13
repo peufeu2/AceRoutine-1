@@ -47,6 +47,8 @@ SOFTWARE.
 #define ACE_ROUTINE_VERSION_STRING "1.4.2"
 
 #include "ace_routine/Coroutine.h"
+#include "ace_routine/Coroutine32bit.h"
+#include "ace_routine/Profiler.h"
 #include "ace_routine/CoroutineScheduler.h"
 #include "ace_routine/Channel.h"
 

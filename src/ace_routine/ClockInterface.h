@@ -51,6 +51,10 @@ class ClockInterface {
      */
     static unsigned long cycles() { return ::micros(); }
 
+    /** This should be updated if cycles() is modified to count CPU cycles
+     */
+    static unsigned long cycles_per_second() { return 1000000; }
+
     /**
      * Get the current seconds. This is derived by dividing millis() by 1000,
      * which works pretty well until the `unsigned long` rolls over at
