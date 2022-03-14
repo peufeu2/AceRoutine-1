@@ -116,6 +116,7 @@ class Coroutine_Delay_32bit_Profiler_Impl: public Coroutine_Delay_32bit_Impl<T_B
      */
     void setDelayZero() {
       this->mDelayStart = this->coroutineMicros();
+      this->mDelayDuration = 0;
     }
 
     /**

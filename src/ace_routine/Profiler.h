@@ -124,7 +124,7 @@ class HistogramCoroutineProfiler : public ace_routine::Profiler {
   	void clear( ) {
   		for( unsigned i=0; i<nbins; i++ )
   			histo[i] = 0;
-  		clear_time = micros();
+  		clear_time = millis();
   	}
 
   	/**
@@ -217,7 +217,7 @@ protected:
 	 * 	type: 	"lin",	for linear histogram
 	 * 	div:	int,	divider, or bin size in cycles
 	 * 	hz:		int,	cycle frequency
-	 * 	runtime_us:		long since it was last cleared, that can be used to calculate
+	 * 	runtime_ms:		long since it was last cleared, that can be used to calculate
 	 * 					how many times the coroutine runs per second
 	 * 	data: [...]		array of ints for histogram bins.
 	 * 
@@ -229,7 +229,7 @@ protected:
 	 *  etc
 	 */
 	virtual void print( Print& printer ) {
-		printer.printf("\"hist\":\"lin\", \"div\":%d, \"hz\": %d, \"runtime_us\": %d, \"data\":", divider, cycles_per_second, micros()-clear_time );
+		printer.printf("\"hist\":\"lin\", \"div\":%d, \"hz\": %d, \"runtime_ms\": %d, \"data\":", divider, cycles_per_second, millis()-clear_time );
 		print_hist( printer );
 	}
 };
@@ -262,7 +262,7 @@ protected:
 	 * {
 	 * 	type: 	"log",	for linear histogram
 	 * 	hz:		int,
-	 * 	runtime_us:		long since it was last cleared, that can be used to calculate
+	 * 	runtime_ms:		long since it was last cleared, that can be used to calculate
 	 * 					how many times the coroutine runs per second
 	 * 	data: [...]		array of ints for histogram bins.
 	 * 
@@ -275,7 +275,7 @@ protected:
 	 * 	histo[3] = 8-16 cycles
 	 */
 	virtual void print( Print& printer ) {
-		printer.printf("\"hist\":\"log\", \"exp\":2, \"hz\": %d, \"runtime_us\": %d, \"data\":", cycles_per_second, micros()-clear_time );
+		printer.printf("\"hist\":\"log\", \"exp\":2, \"hz\": %d, \"runtime_ms\": %d, \"data\":", cycles_per_second, millis()-clear_time );
 		print_hist( printer );
 	}
 };
@@ -306,7 +306,7 @@ protected:
    * {
    *  type:   "log",  for linear histogram
    *  hz:   int,
-   *  runtime_us:   long since it was last cleared, that can be used to calculate
+   *  runtime_ms:   long since it was last cleared, that can be used to calculate
    *          how many times the coroutine runs per second
    *  data: [...]   array of ints for histogram bins.
    * 
@@ -319,7 +319,7 @@ protected:
    *  histo[3] = 8-16 cycles
    */
   virtual void print( Print& printer ) {
-    printer.printf("\"hist\":\"log\", \"exp\":%f, \"hz\": %d, \"runtime_us\": %d, \"data\":", exp(1.0/logexponent), cycles_per_second, micros()-clear_time );
+    printer.printf("\"hist\":\"log\", \"exp\":%f, \"hz\": %d, \"runtime_ms\": %d, \"data\":", exp(1.0/logexponent), cycles_per_second, millis()-clear_time );
     print_hist( printer );
   }
 };
