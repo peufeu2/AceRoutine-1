@@ -16,9 +16,10 @@ namespace ace_routine {
 template <typename T_BASE, typename T_CLOCK>
 class Coroutine_Delay_32bit_Impl : public T_BASE  {
   public:
-    unsigned long coroutineMillis()  const {   return T_CLOCK::millis();    }
-    unsigned long coroutineMicros()  const {   return T_CLOCK::micros();    }
-    unsigned long coroutineSeconds() const {   return T_CLOCK::seconds();   }
+    static unsigned long coroutineMillis()  {   return T_CLOCK::millis();    }
+    static unsigned long coroutineMicros()  {   return T_CLOCK::micros();    }
+    static unsigned long coroutineSeconds() {   return T_CLOCK::seconds();   }
+    static unsigned long coroutineCycles()  {   return T_CLOCK::cycles();    }
 
     /**
      *    All functions store delays as 32 bit micros.
@@ -76,44 +77,6 @@ class Coroutine_Delay_32bit_Impl : public T_BASE  {
     uint32_t mDelayDuration;
 };
 
-/**
- *    Base class for the Profiler. This is just the interface.
- *    Implementation in Profiler.h
- */
-class CoroutineProfilerBase {
-  public:
-    /**
-     * Called at the end of a delay, as the coroutine switches 
-     * from Run to Yield/Delay state.
-     * 
-     * Parameters are the actual delay that occured,
-     * and the delay that was requested by the coroutine. 
-     * 
-     * The profiler can do whatever it wants with that, for 
-     * example make statistics about the difference between
-     * the two.  
-     */
-    virtual void profileWait( unsigned long wait_micros, unsigned long expected_wait_micros ) =0;
-
-    /**
-     * Called as the coroutine switches from Yield/Delay state to Run.
-     * 
-     * Parameters are the time spent running this iteration of the
-     * coroutine. These come from ClockInterface::cycles, so it can be 
-     * CPU cycles, microseconds, etc.
-     */
-    virtual void profileRun ( unsigned long run_cycles  ) =0;
-
-    /**
-     * Clears accumulated profiling statistics.
-     */
-    virtual void clear() =0;
-
-    /**
-     * Prints accumulated profiling statistics.
-     */
-    virtual void print( Print& printer, unsigned long cycles_per_second ) =0;
-};
 
 /**
  *    This is one possible base class for Coroutine.
@@ -135,44 +98,16 @@ class Coroutine_Delay_32bit_Profiler_Impl: public Coroutine_Delay_32bit_Impl<T_B
      * If these pointers are null, then no profiling occurs on that
      * coroutine.
      */
-    CoroutineProfilerBase *mWaitProfiler = nullptr;
-    CoroutineProfilerBase *mRunProfiler = nullptr;
+    Profiler *mWaitProfiler = nullptr;
+    Profiler *mRunProfiler = nullptr;
 
   public:
 
-    void setWaitProfiler( CoroutineProfilerBase *profiler ) { mWaitProfiler = profiler; }
-    void setRunProfiler ( CoroutineProfilerBase *profiler ) { mRunProfiler  = profiler; }
+    void setWaitProfiler( Profiler *profiler ) { mWaitProfiler = profiler; profiler->begin( this->getName(), "wait", 1000000 ); }
+    void setRunProfiler ( Profiler *profiler ) { mRunProfiler  = profiler; profiler->begin( this->getName(), "run" , T_CLOCK::cycles_per_second() ); }
 
-    CoroutineProfilerBase* getWaitProfiler( ) { return mWaitProfiler; }
-    CoroutineProfilerBase* getRunProfiler ( ) { return mRunProfiler; }
-
-    bool printProfilingStats( Print& printer ) { 
-      printer.print( "\"" );
-      if( this->getName() )
-        printer.print( this->getName() );
-      else
-        printer.printf( "%x", this );
-      printer.print( "\":{");
-      if( this->mRunProfiler ) {
-        printer.print("\"run\":" );
-        this->mRunProfiler->print( printer, T_CLOCK::cycles_per_second() );
-        if( this->mWaitProfiler )
-          printer.print(",");
-      }
-      if( this->mWaitProfiler ) {
-        printer.print("\"wait\":" );
-        this->mWaitProfiler->print( printer, 1000000 );
-      }
-      printer.print( "}");
-      return true;
-    }
-    void clearProfilingStats( ) { 
-      if( this->mRunProfiler )
-        this->mRunProfiler->clear();
-      if( this->mWaitProfiler )
-        this->mWaitProfiler->clear();
-    }
-
+    Profiler* getWaitProfiler( ) { return mWaitProfiler; }
+    Profiler* getRunProfiler ( ) { return mRunProfiler; }
 
     /**
      * Configures zero delay.
@@ -217,6 +152,7 @@ class Coroutine_Delay_32bit_Profiler_Impl: public Coroutine_Delay_32bit_Impl<T_B
         mRunProfiler->profileRun( ticks - this->mDelayStart );
     }
 };
+
 
 }
 

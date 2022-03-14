@@ -292,7 +292,7 @@ template <typename T> class CoroutineSchedulerTemplate;
  *    Base class for the Profiler. We need to declare it for the 
  *    dummy functions below.
  */
-class CoroutineProfilerBase;
+class Profiler;
 
 /**   bx:
  *    Helper base class.
@@ -312,10 +312,10 @@ class UnnamedCoroutine {
     void setName( const char *_name ) { }
 
     // dummy functions so user code compiles even with profiling off.
-    virtual void setWaitProfiler( CoroutineProfilerBase *profiler ) { }
-    virtual void setRunProfiler ( CoroutineProfilerBase *profiler ) { }
-    virtual CoroutineProfilerBase* getWaitProfiler( ) { return nullptr; }
-    virtual CoroutineProfilerBase* getRunProfiler ( ) { return nullptr; }
+    virtual void setWaitProfiler( Profiler *profiler ) { }
+    virtual void setRunProfiler ( Profiler *profiler ) { }
+    virtual Profiler* getWaitProfiler( ) { return nullptr; }
+    virtual Profiler* getRunProfiler ( ) { return nullptr; }
     virtual bool printProfilingStats( Print& printer ) { return false; }
     virtual void clearProfilingStats( ) { }
 };
@@ -346,9 +346,10 @@ template <typename T_BASE, typename T_CLOCK>
 class Coroutine_Delay_16bit_Impl : public T_BASE {
   public:
 
-    unsigned long coroutineMillis()  const {   return T_CLOCK::millis();    }
-    unsigned long coroutineMicros()  const {   return T_CLOCK::micros();    }
-    unsigned long coroutineSeconds() const {   return T_CLOCK::seconds();   }
+    static unsigned long coroutineMillis()  {   return T_CLOCK::millis();    }
+    static unsigned long coroutineMicros()  {   return T_CLOCK::micros();    }
+    static unsigned long coroutineSeconds() {   return T_CLOCK::seconds();   }
+    static unsigned long coroutineCycles()  {   return T_CLOCK::cycles();    }
 
     /** Check if delay millis time is over. */
     bool isDelayExpired() const {
@@ -599,6 +600,27 @@ class CoroutineTemplate : public T_BASE {
     void setupCoroutine(const __FlashStringHelper* /*name*/)
         ACE_ROUTINE_DEPRECATED {}
 
+    // define it public to enumerate coroutines to add schedulers
+    /**
+     * Get the pointer to the root pointer. Implemented as a function static to
+     * fix the C++ static initialization problem, making it safe to use this in
+     * other static contexts.
+     */
+    static CoroutineTemplate** getRoot() {
+      // Use a static variable inside a function to solve the static
+      // initialization ordering problem.
+      static CoroutineTemplate* root;
+      return &root;
+    }
+
+    /**
+     * Return the next pointer as a pointer to the pointer, similar to
+     * getRoot(). This makes it much easier to manipulate a singly-linked list.
+     * Also makes setNext() method unnecessary. Should be used only by
+     * CoroutineScheduler.
+     */
+    CoroutineTemplate** getNext() { return &mNext; }
+
   protected:
     /**
      * The execution status of the coroutine, corresponding to the
@@ -713,30 +735,11 @@ class CoroutineTemplate : public T_BASE {
     void setTerminated() { mStatus = kStatusTerminated; }
 
 
+
   private:
     // Disable copy-constructor and assignment operator
     CoroutineTemplate(const CoroutineTemplate&) = delete;
     CoroutineTemplate& operator=(const CoroutineTemplate&) = delete;
-
-    /**
-     * Get the pointer to the root pointer. Implemented as a function static to
-     * fix the C++ static initialization problem, making it safe to use this in
-     * other static contexts.
-     */
-    static CoroutineTemplate** getRoot() {
-      // Use a static variable inside a function to solve the static
-      // initialization ordering problem.
-      static CoroutineTemplate* root;
-      return &root;
-    }
-
-    /**
-     * Return the next pointer as a pointer to the pointer, similar to
-     * getRoot(). This makes it much easier to manipulate a singly-linked list.
-     * Also makes setNext() method unnecessary. Should be used only by
-     * CoroutineScheduler.
-     */
-    CoroutineTemplate** getNext() { return &mNext; }
 
     /**
      * Insert the current coroutine at the root of the singly linked list. This
