@@ -21,6 +21,8 @@ const int LED_OFF = LOW;
 // with profiling
 using Coroutine = ace_routine::CoroutineTemplate< ace_routine::Coroutine_Delay_32bit_Profiler_Impl< ace_routine::NamedCoroutine,ace_routine::ClockInterface >>;
 using CoroutineScheduler = ace_routine::CoroutineSchedulerTemplate<Coroutine>;
+using Profiler = ace_routine::Profiler;
+Profiler *Profiler::root;
 
 // without profiling, with 32 bit delays
 // using Coroutine = ace_routine::CoroutineTemplate< ace_routine::Coroutine_Delay_32bit_Impl< ace_routine::NamedCoroutine,ace_routine::ClockInterface >>;
@@ -36,10 +38,10 @@ using CoroutineScheduler = ace_routine::CoroutineSchedulerTemplate<Coroutine>;
 COROUTINE(blinkLed) {
   COROUTINE_LOOP() {
     digitalWrite(LED, LED_ON);
-    delayMicroseconds(random(1000));
+    delayMicroseconds(random(10));
     COROUTINE_DELAY(10);
     digitalWrite(LED, LED_OFF);
-    delayMicroseconds(random(1000));
+    delayMicroseconds(random(10));
     COROUTINE_DELAY(100);
   }
 }
@@ -64,11 +66,28 @@ COROUTINE(printHelloWorld) {
  * Now profile them and see if the second coroutine interferes with the first.
  */
 
-// Linear histogram with 30 bins, 5000µs per bin, so 0-150 ms
-ace_routine::LinearHistogramCoroutineProfiler wait_prof(30,5000);
+/*  Runtime of blinkLed should be 0-10µs, so for the sake of example,
+    let's use a linear profiler.
+    It uses microseconds as units by defaults, so let's use 
+      first parameter: 30 histogram bine
+      second parameter: each bin is 500µs
+*/
+ace_routine::LinearHistogramCoroutineProfiler run_prof( 30, 1 );
 
-// Log histogram to see how long it takes to blink a LED
-ace_routine::Log2HistogramCoroutineProfiler run_prof(10);
+// ace_routine::Log2HistogramCoroutineProfiler run_prof(10);
+
+/*  Wait time is measured as the difference between what was requested by
+    COROUTINE_DELAY and what delay actually happened. So it won't plot
+    the actual delay, rather how late it was compared to schedule.
+    This makes it much more useful when a coroutine uses variable delays.
+
+    Let's use a logarithmic histogram, which compresses a large
+    dynamic range into few bins by taking the log2 of wait time.
+
+    20 bins means it will record from 2^0 to 2^20 microseconds.
+*/
+ace_routine::Log2HistogramCoroutineProfiler wait_prof( 20 );
+
 
 void setup() {
   Serial.begin(115200);
@@ -78,9 +97,21 @@ void setup() {
   // Auto-register all coroutines into the scheduler.
   CoroutineScheduler::setup();
 
+  // give them names so they show up correctly in profiler output
+  printHelloWorld.setName( "hello" );
+  blinkLed.setName( "blinkLed" );
+
+  /* set profilers manually */
   blinkLed.setRunProfiler( &run_prof );
   blinkLed.setWaitProfiler( &wait_prof );
 
+  /* set profilers automatically for all coroutines */
+  /*
+  for (Coroutine** p = Coroutine::getRoot(); (*p) != nullptr; p = (*p)->getNext()) {
+    (*p)->setRunProfiler( ace_routine::Log2HistogramCoroutineProfiler wait_prof( 20 ));
+    (*p)->setWaitProfiler( ace_routine::Log2HistogramCoroutineProfiler wait_prof( 20 ));
+  }
+  */
 }
 
 void loop() {
@@ -90,7 +121,7 @@ void loop() {
   unsigned m = micros();
   if( int(m - next_print) > 0 ) {
     next_print = m+2000000;
-    CoroutineScheduler::printProfilingStats( Serial, false /* don't reset stats */ );
+    Profiler::printAllStats( Serial, false /* don't reset stats */ );
     Serial.printf(" cpu %d\n", getCpuFrequencyMhz() );
   }
 
