@@ -12,7 +12,7 @@ def nicegrid():
     plt.minorticks_on()
 
 # geab json profile data from ESP32
-if 0:
+if 1:
     print("req")
     jsondata = urllib.request.urlopen("http://192.168.0.16/coro", timeout=2).read().decode("utf-8")
     print( jsondata )
